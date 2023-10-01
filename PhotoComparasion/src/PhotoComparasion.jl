@@ -4,12 +4,42 @@ using Images
 using Statistics
 import PostgresORM: IEntity
 import LibPQ
+using JSON3
 
-export getElementsInPath, isImageFile, getDirsInPath
-export transformimage, ImageComparasionSetting, aresimilar, hash
+export getElementsInPath, isImageFile, getDirsInPath, processimagesindirectory,
+    Storage, StorageUniqueUnit, StorageDuplicateUnit, write, read
+export transformimage, ImageComparasionSetting, aresimilar
 export with_default_connection, get_query, table_exists, initializedb
+# export *
+import Base: push!, push, write, read
 
 CONNECTION_STRING = "dbname=postgres user=admin password=admin"
+
+struct ImageComparasionSetting
+    scalingWidth::Int
+    scalingHeight::Int
+    errorThreshold::Float64
+end
+
+struct StorageUniqueUnit
+    id::Int
+    path::String
+    img::Array{Float64}
+end
+
+struct StorageDuplicateUnit
+    path::String
+    id::Int
+end
+
+mutable struct Storage
+    id_seq::Int
+    uniqueStorage::AbstractVector{StorageUniqueUnit}
+    duplicateStorage::AbstractVector{StorageDuplicateUnit}
+    settings::ImageComparasionSetting
+end
+
+Storage(settings::ImageComparasionSetting)::Storage = Storage(0, Vector{StorageUniqueUnit}(), Vector{StorageDuplicateUnit}(), settings)
 
 function getElementsInPath(path::String)::AbstractVector{AbstractString}
     return readdir(path)
@@ -31,12 +61,43 @@ function isImageFile(fileName::String)::Bool
     return any((occursin(extensionRegex, lowercase(fileName)) for extensionRegex in extensions))
 end
 
+imagesNamesInPath(path::String)::AbstractVector{AbstractString} = filter(isImageFile, readdir(path))
 
-struct ImageComparasionSetting
-    scalingWidth::Int
-    scalingHeight::Int
-    errorThreshold::Float64
+function processimagesindirectory(path::String, storage::Storage)
+    for img in imagesNamesInPath(path)
+        checkforduplicates(img, storage)
+    end
 end
+
+function checkforduplicates(path::String, storage::Storage)
+    image = transformimage(path, storage.settings)
+    img = findinstorage(image, storage)
+
+    if isnothing(img)
+        storage.id_seq += 1
+        push!(storage, StorageUniqueUnit(storage.id_seq, path, image))
+    elseif img.path != path
+        push!(storage, StorageDuplicateUnit(path, img.id))
+    end
+end
+
+function findinstorage(image::Array{Float64}, storage::Storage)::Union{StorageUniqueUnit,Nothing}
+    for i in storage.uniqueStorage
+        if aresimilar(i.img, image, storage.settings)
+            return i
+        end
+    end
+    return nothing
+end
+
+function push!(storage::Storage, unit::StorageUniqueUnit)
+    push!(storage.uniqueStorage, unit)
+end
+function push!(storage::Storage, unit::StorageDuplicateUnit)
+    push!(storage.duplicateStorage, unit)
+end
+
+transformimage(image::String, settings::ImageComparasionSetting) = transformimage(load(image), settings)
 
 function transformimage(image::Array{T}, settings::ImageComparasionSetting)::Array{Float64} where {T<:Colorant}
     return Float64.(Gray.(imresize(image, (settings.scalingWidth, settings.scalingHeight))))
@@ -44,7 +105,7 @@ end
 
 function aresimilar(img_one::Matrix{Float64}, img_two::Matrix{Float64}, settings::ImageComparasionSetting)::Any
     threshold = mean(abs.(img_one .- img_two))
-    print(threshold)
+    # print(threshold)
     return threshold <= settings.errorThreshold
 end
 
@@ -77,6 +138,11 @@ end
 get_query(id::String)::String = get_query(Symbol(id))
 get_query(id::Symbol)::String = get_query(id, missing)
 
+"""
+    get_query(id::Symbol, t_name::Union{String,Symbol,Missing})::String
+
+
+"""
 function get_query(id::Symbol, t_name::Union{String,Symbol,Missing})::String
     mapping = Dict{Symbol,String}(
         :table_exists => "SELECT EXISTS (
@@ -115,6 +181,11 @@ function get_query(id::Symbol, t_name::Union{String,Symbol,Missing})::String
 
 end
 
+"""
+    table_exists(name::Union{String,Symbol})::Bool
+
+    Checks if the table exists
+"""
 table_exists(name::String)::Bool = any(with_default_connection(get_query(:table_exists, name))[1])
 table_exists(name::Symbol)::Bool = table_exists(String(name))
 
@@ -133,6 +204,17 @@ function initializedb()
             create_table(name)
         end
     end
-end# table_exists(:unique_image)
+end # table_exists(:unique_image)
+
+function write(filename::String, storage::Storage)::Nothing
+    Base.write(filename, JSON3.write(storage))
+    return
+end
+
+function read(filename::String)
+    contents = Base.read(filename, String)
+    JSON3.read(contents, Storage)
+end
+
 
 end # module

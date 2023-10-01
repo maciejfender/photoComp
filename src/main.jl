@@ -8,6 +8,7 @@ Pkg.activate(pwd())
 # Pkg.add("PostgresORM")
 # Pkg.add("LibPQ")
 # Pkg.add("OffsetArrays")
+# Pkg.add("JSON3")
 
 using Revise
 includet(joinpath("..", "PhotoComparasion", "src", "PhotoComparasion.jl"))
@@ -37,5 +38,16 @@ settings = ImageComparasionSetting(
 # @time x = aresimilar(img_12, img_1, settings)
 # transformimage(img_1, settings)
 
-initializedb()
+# initializedb()
 
+
+directory = pwd()
+
+storage = Storage(settings)
+
+
+@time processimagesindirectory(directory,storage)
+
+PhotoComparasion.write("testFile.json", storage)
+
+PhotoComparasion.read("testFile.json")
